@@ -66,7 +66,13 @@ static void subscribe() {
       /*   | XCB_EVENT_MASK_COLOR_MAP_CHANGE */
       /*   | XCB_EVENT_MASK_OWNER_GRAB_BUTTON */
   };
-  xcb_change_window_attributes_checked(connection, screen->root, XCB_CW_EVENT_MASK, values);
+  xcb_void_cookie_t cookie = xcb_change_window_attributes_checked(connection, screen->root, XCB_CW_EVENT_MASK, values);
+  xcb_generic_error_t *error = xcb_request_check(connection, cookie);
+  // TODO: check error code
+  if (error) {
+    printf("Received error code %d.\n", error->error_code);
+    die("Window manager already running.");
+  }
   xcb_flush(connection);
   if (xcb_connection_has_error(connection)) {
     die("Connection error after subscribe.");
@@ -85,13 +91,35 @@ static void setup() {
   subscribe();
 }
 
+static void fullscreen(xcb_window_t window) {
+  static const uint16_t mask =
+    XCB_CONFIG_WINDOW_X
+    | XCB_CONFIG_WINDOW_Y
+    | XCB_CONFIG_WINDOW_WIDTH
+    | XCB_CONFIG_WINDOW_HEIGHT;
+  const uint32_t values[] = {
+    0,
+    0,
+    screen->width_in_pixels,
+    screen->height_in_pixels,
+  };
+  xcb_configure_window(connection, window, mask, values);
+}
+
 static void event_loop() {
   xcb_generic_event_t *event;
   // TODO: switch to non-blocking xcb_poll_for_event
   while ((event = xcb_wait_for_event(connection))) {
     printf("Received event %d\n", event->response_type & ~0x80);
-    fflush(stdout);
     switch (event->response_type & ~0x80) {
+      case XCB_MAP_REQUEST:
+        {
+          printf("MAP_REQUEST\n");
+          xcb_window_t window = ((xcb_map_request_event_t*)event)->window;
+          xcb_map_window(connection, window);
+          fullscreen(window);
+          break;
+        }
       case XCB_EXPOSE:
         {
           printf("EXPOSE\n");
@@ -105,6 +133,8 @@ static void event_loop() {
       default:
         break;
     }
+    fflush(stdout);
+    xcb_flush(connection);
     free(event);
   }
   printf(".");
