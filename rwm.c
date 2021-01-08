@@ -39,6 +39,7 @@ static void signals() {
 static void subscribe() {
   const static uint32_t values[] = {
     XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT
+      | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
       /* XCB_EVENT_MASK_EXPOSURE */
       /*   | XCB_EVENT_MASK_KEY_PRESS */
       /*   | XCB_EVENT_MASK_KEY_RELEASE */
@@ -91,6 +92,27 @@ static void setup() {
   subscribe();
 }
 
+typedef struct Client {
+  xcb_window_t *window;
+  struct Client *next;
+} Client;
+
+typedef struct {
+  Client *head;
+} Desktop;
+
+static Desktop desktop = { NULL };
+
+static void tile() {
+  int totalClients = 0;
+  Client *c = desktop.head;
+  while (c != NULL) {
+    totalClients++;
+    c = c->next;
+  }
+  printf("Total clients %d.\n", totalClients);
+}
+
 static void fullscreen(xcb_window_t window) {
   static const uint16_t mask =
     XCB_CONFIG_WINDOW_X
@@ -110,7 +132,7 @@ static void event_loop() {
   xcb_generic_event_t *event;
   // TODO: switch to non-blocking xcb_poll_for_event
   while ((event = xcb_wait_for_event(connection))) {
-    printf("Received event %d\n", event->response_type & ~0x80);
+    printf("Received event %d, %d\n", event->response_type & ~0x80, event->response_type);
     switch (event->response_type & ~0x80) {
       case XCB_MAP_REQUEST:
         {
@@ -118,20 +140,35 @@ static void event_loop() {
           xcb_window_t window = ((xcb_map_request_event_t*)event)->window;
           xcb_map_window(connection, window);
           fullscreen(window);
+          // TODO: malloc?
+          Client *c = malloc(sizeof(Client));
+          (*c).window = &window;
+          (*c).next = NULL;
+          Client *p = desktop.head;
+          if (desktop.head == NULL) {
+            desktop.head = c;
+          } else {
+            while (p->next != NULL) {
+              p = p->next;
+            }
+            p->next = c;
+          }
+          printf("Head: %p, Next: %p\n", desktop.head, desktop.head->next);
+          if (desktop.head->next != NULL)
+            printf("Next: %p, Next Next: %p\n", desktop.head->next, desktop.head->next->next);
+          tile();
           break;
         }
-      case XCB_EXPOSE:
-        {
-          printf("EXPOSE\n");
-          break;
-        }
-      case XCB_BUTTON_PRESS:
-        {
-          printf("BUTTON_PRESS\n");
-          break;
-        }
+
+      case XCB_CONFIGURE_NOTIFY: printf("XCB_CONFIGURE_NOTIFY\n"); break;
+      case XCB_EXPOSE: printf("EXPOSE\n"); break;
+      case XCB_BUTTON_PRESS: printf("BUTTON_PRESS\n"); break;
+        // SubstructureNotify
+      case XCB_DESTROY_NOTIFY: printf("XCB_DESTROY_NOTIFY\n"); break;
+      case XCB_UNMAP_NOTIFY: printf("XCB_UNMAP_NOTIFY\n"); break;
+      case XCB_MAP_NOTIFY: printf("XCB_MAP_NOTIFY\n"); break;
       default:
-        break;
+                           break;
     }
     fflush(stdout);
     xcb_flush(connection);
