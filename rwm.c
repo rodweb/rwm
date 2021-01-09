@@ -50,11 +50,50 @@ static void handle_signal(int signal) {
   exit(0);
 }
 
+static void remove_client(Client *client) {
+  // TODO: should not happen;
+  if (client == NULL) return;
+  Client *c, *p;
+  for (c = desktop.head; c != client; c=c->next) p=c;
+  if (p) p->next = c->next;
+  if (c == desktop.head && c->next == NULL) desktop.head = NULL;
+  free(client);
+}
+
+static Client* create_client(xcb_window_t window) {
+  Client *c = malloc(sizeof(Client));
+  (*c).window = window;
+  (*c).next = NULL;
+  return c;
+}
+
+static void add_client(Client *client) {
+  Client *c = desktop.head;
+  if (desktop.head == NULL) {
+    desktop.head = client;
+  } else {
+    while (c->next != NULL) {
+      c = c->next;
+    }
+    c->next = client;
+  }
+}
+
+static void trace_desktop(char * message) {
+  Client *c = desktop.head;
+  int i = 0;
+  trace("%s\n", message);
+  while (c != NULL) {
+    trace("%d - %p\n", ++i, c);
+    c=c->next;
+  }
+}
+
 static void setup_signals() {
   signal(SIGINT, handle_signal);
 }
 
-static void setup_screen() {
+static void setup_screens() {
   const xcb_setup_t *setup = xcb_get_setup(connection);
   xcb_screen_iterator_t iterator = xcb_setup_roots_iterator(setup);
   for (int i = 0; i < screenNumber; i++) {
@@ -108,6 +147,20 @@ static void setup_subscriptions() {
   }
 }
 
+static void setup_windows() {
+  xcb_query_tree_reply_t *reply;
+  // TODO: check for error
+  if ((reply = xcb_query_tree_reply(connection, xcb_query_tree(connection, screen->root), NULL))) {
+    xcb_window_t *windows = xcb_query_tree_children(reply);
+    int i;
+    for (i = 0; i < xcb_query_tree_children_length(reply); i++) {
+      add_client(create_client(windows[i]));
+    }
+    trace("Found %d windows...", i + 1);
+    free(reply);
+  }
+}
+
 static void tile() {
   int totalClients = 0;
   Client *c = desktop.head;
@@ -119,7 +172,8 @@ static void tile() {
   trace("ok(%d).\n", totalClients);
 }
 
-static void fullscreen(xcb_window_t window) {
+static void set_fullscreen(xcb_window_t window) {
+  // TODO: configure appropriate atoms
   static const uint16_t mask =
     XCB_CONFIG_WINDOW_X
     | XCB_CONFIG_WINDOW_Y
@@ -141,43 +195,12 @@ static Client* get_client(xcb_window_t window) {
   return c;
 }
 
-static void trace_desktop(char * message) {
-  Client *c = desktop.head;
-  int i = 0;
-  trace("%s\n", message);
-  while (c != NULL) {
-    trace("%d - %p\n", ++i, c);
-    c=c->next;
-  }
-}
-
-static void remove_client(Client *client) {
-  // TODO: should not happen;
-  if (client == NULL) return;
-  Client *c, *p;
-  for (c = desktop.head; c != client; c=c->next) p=c;
-  if (p) p->next = c->next;
-  if (c == desktop.head && c->next == NULL) desktop.head = NULL;
-  free(client);
-}
-
 static void map_request(xcb_generic_event_t *event) {
   trace("Handling XCB_MAP_REQUEST...");
   xcb_window_t window = ((xcb_map_request_event_t*)event)->window;
   xcb_map_window(connection, window);
-  fullscreen(window);
-  Client *c = malloc(sizeof(Client));
-  (*c).window = window;
-  (*c).next = NULL;
-  Client *p = desktop.head;
-  if (desktop.head == NULL) {
-    desktop.head = c;
-  } else {
-    while (p->next != NULL) {
-      p = p->next;
-    }
-    p->next = c;
-  }
+  set_fullscreen(window);
+  add_client(create_client(window));
   trace("ok.\n");
   tile();
 }
@@ -185,8 +208,7 @@ static void map_request(xcb_generic_event_t *event) {
 static void destroy_notify(xcb_generic_event_t *event) {
   trace("Handling XCB_DESTROY_NOTIFY...");
   xcb_window_t window = ((xcb_destroy_notify_event_t*)event)->window;
-  Client *client = get_client(window);
-  remove_client(client);
+  remove_client(get_client(window));
   trace("ok.\n");
   tile();
 }
@@ -209,13 +231,18 @@ static bool handle_event(xcb_generic_event_t *event) {
       return true;
     }
   }
+  return false;
 }
 
 static void event_loop() {
   xcb_generic_event_t *event;
   // TODO: switch to non-blocking xcb_poll_for_event
   while ((event = xcb_wait_for_event(connection))) {
-    if (handle_event(event)) continue;
+    if (handle_event(event)) {
+      xcb_flush(connection);
+      free(event);
+      continue;
+    }
     switch (event->response_type & ~0x80) {
       case XCB_EXPOSE:
         trace("Ignoring XCB_EXPOSE.\n"); break;
@@ -245,7 +272,8 @@ int main() {
   trace("Initializing rwm...\n");
   step("Connection", connect);
   step("Signaling", setup_signals);
-  step("Screen", setup_screen);
+  step("Screens", setup_screens);
+  step("Windows", setup_windows);
   step("Subscribing", setup_subscriptions);
   event_loop();
   disconnect();
