@@ -93,7 +93,7 @@ static void setup() {
 }
 
 typedef struct Client {
-  xcb_window_t *window;
+  xcb_window_t window;
   struct Client *next;
 } Client;
 
@@ -106,11 +106,16 @@ static Desktop desktop = { NULL };
 static void tile() {
   int totalClients = 0;
   Client *c = desktop.head;
+  printf("Counting\n");
+  fflush(stdout);
   while (c != NULL) {
+    printf("i = %d, %p\n", totalClients, c);
+  fflush(stdout);
     totalClients++;
     c = c->next;
   }
-  printf("Total clients %d.\n", totalClients);
+  printf("Total clients %d\n", totalClients);
+  fflush(stdout);
 }
 
 static void fullscreen(xcb_window_t window) {
@@ -128,6 +133,69 @@ static void fullscreen(xcb_window_t window) {
   xcb_configure_window(connection, window, mask, values);
 }
 
+static Client* get_client(xcb_window_t window) {
+  Client *c = desktop.head;
+  // TODO: search on all desktops
+  while (c != NULL && c->window != window) c=c->next;
+  printf("Found client %p\n", c);
+  return c;
+}
+
+static void print_desktop(char * message) {
+  Client *c = desktop.head;
+  int i = 0;
+  printf("%s\n", message);
+  while (c != NULL) {
+    printf("%d - %p\n", ++i, c);
+    c=c->next;
+  }
+  fflush(stdout);
+}
+
+static void remove_client(Client *client) {
+  printf("Removing client %p\n", client);
+  fflush(stdout);
+  print_desktop("before remove_client");
+  Client *curr = desktop.head;
+  Client *prev = NULL;
+  // TODO: search on all desktops
+  while (curr != NULL && curr != client) {
+    prev = curr;
+    curr = curr->next;
+  }
+  if (curr != client) {
+    printf("Client not found\n");
+    fflush(stdout);
+    return;
+  } else {
+    printf("Found client %p\n", curr);
+    fflush(stdout);
+  }
+  if (prev && curr->next) {
+    prev->next = curr->next;
+    printf("Replacing previous\n");
+    fflush(stdout);
+  } else if (prev) {
+    prev->next = NULL;
+  }
+  if (curr == desktop.head) {
+    desktop.head = NULL;
+    printf("Removing head\n");
+    fflush(stdout);
+  }
+
+  print_desktop("after remove_client");
+  fflush(stdout);
+  free(curr);
+}
+
+static void destroy_notify(xcb_window_t window) {
+  printf("Destroying client\n");
+  fflush(stdout);
+  Client *client = get_client(window);
+  remove_client(client);
+}
+
 static void event_loop() {
   xcb_generic_event_t *event;
   // TODO: switch to non-blocking xcb_poll_for_event
@@ -142,7 +210,7 @@ static void event_loop() {
           fullscreen(window);
           // TODO: malloc?
           Client *c = malloc(sizeof(Client));
-          (*c).window = &window;
+          (*c).window = window;
           (*c).next = NULL;
           Client *p = desktop.head;
           if (desktop.head == NULL) {
@@ -163,8 +231,15 @@ static void event_loop() {
       case XCB_CONFIGURE_NOTIFY: printf("XCB_CONFIGURE_NOTIFY\n"); break;
       case XCB_EXPOSE: printf("EXPOSE\n"); break;
       case XCB_BUTTON_PRESS: printf("BUTTON_PRESS\n"); break;
-        // SubstructureNotify
-      case XCB_DESTROY_NOTIFY: printf("XCB_DESTROY_NOTIFY\n"); break;
+                             // SubstructureNotify
+      case XCB_DESTROY_NOTIFY: 
+                             {
+                               printf("XCB_DESTROY_NOTIFY\n");
+                               xcb_window_t window = ((xcb_destroy_notify_event_t*)event)->window;
+                               destroy_notify(window);
+                               tile();
+                               break;
+                             }
       case XCB_UNMAP_NOTIFY: printf("XCB_UNMAP_NOTIFY\n"); break;
       case XCB_MAP_NOTIFY: printf("XCB_MAP_NOTIFY\n"); break;
       default:
