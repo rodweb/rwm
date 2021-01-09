@@ -110,7 +110,7 @@ static void tile() {
   fflush(stdout);
   while (c != NULL) {
     printf("i = %d, %p\n", totalClients, c);
-  fflush(stdout);
+    fflush(stdout);
     totalClients++;
     c = c->next;
   }
@@ -155,6 +155,11 @@ static void print_desktop(char * message) {
 static void remove_client(Client *client) {
   printf("Removing client %p\n", client);
   fflush(stdout);
+  if (client == NULL) {
+    printf("Client is NULL.\n");
+    fflush(stdout);
+    return;
+  }
   print_desktop("before remove_client");
   Client *curr = desktop.head;
   Client *prev = NULL;
@@ -249,9 +254,6 @@ static void event_loop() {
     xcb_flush(connection);
     free(event);
   }
-  printf(".");
-  fflush(stdout);
-  sleep(1);
 }
 
 int main() {
