@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -20,12 +21,17 @@ static void die(char* message) {
   exit(1);
 }
 
+static void step(char *step_name, void (*func)(void)) {
+  trace("%s...", step_name);
+  func();
+  trace("ok.\n");
+}
+
 static void connect() {
-  connection = xcb_connect(NULL, &screenNumber);
+  connection = xcb_connect(NULL, NULL);
   if (xcb_connection_has_error(connection))  {
     die("Connection error.");
   }
-  trace("Current screen is %d\n", screenNumber);
 }
 
 static void handle_signal(int signal) {
@@ -34,11 +40,21 @@ static void handle_signal(int signal) {
   exit(0);
 }
 
-static void signals() {
+static void setup_signals() {
   signal(SIGINT, handle_signal);
 }
 
-static void subscribe() {
+static void setup_screen() {
+  const xcb_setup_t *setup = xcb_get_setup(connection);
+  xcb_screen_iterator_t iterator = xcb_setup_roots_iterator(setup);
+  for (int i = 0; i < screenNumber; i++) {
+    xcb_screen_next(&iterator);
+  }
+  screen = iterator.data;
+  /* trace("Screen is %dx%d\n", screen->width_in_pixels, screen->height_in_pixels); */
+}
+
+static void setup_subscriptions() {
   const static uint32_t values[] = {
     XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT
       | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
@@ -82,18 +98,6 @@ static void subscribe() {
   }
 }
 
-static void setup() {
-  signals();
-  const xcb_setup_t *setup = xcb_get_setup(connection);
-  xcb_screen_iterator_t iterator = xcb_setup_roots_iterator(setup);
-  for (int i = 0; i < screenNumber; i++) {
-    xcb_screen_next(&iterator);
-  }
-  screen = iterator.data;
-  trace("Screen is %dx%d\n", screen->width_in_pixels, screen->height_in_pixels);
-  subscribe();
-}
-
 typedef struct Client {
   xcb_window_t window;
   struct Client *next;
@@ -108,13 +112,12 @@ static Desktop desktop = { NULL };
 static void tile() {
   int totalClients = 0;
   Client *c = desktop.head;
-  trace("Counting\n");
+  trace("Tiling...");
   while (c != NULL) {
-    trace("i = %d, %p\n", totalClients, c);
     totalClients++;
     c = c->next;
   }
-  trace("Total clients %d\n", totalClients);
+  trace("ok(%d).\n", totalClients);
 }
 
 static void fullscreen(xcb_window_t window) {
@@ -140,7 +143,7 @@ static Client* get_client(xcb_window_t window) {
   return c;
 }
 
-static void print_desktop(char * message) {
+static void trace_desktop(char * message) {
   Client *c = desktop.head;
   int i = 0;
   trace("%s\n", message);
@@ -151,12 +154,12 @@ static void print_desktop(char * message) {
 }
 
 static void remove_client(Client *client) {
-  trace("Removing client %p\n", client);
+  trace("Removing client(%p)...", client);
   if (client == NULL) {
-    trace("Client is NULL.\n");
+    trace("Client is NULL...");
     return;
   }
-  print_desktop("before remove_client");
+  trace_desktop("Before remove_client\n");
   Client *curr = desktop.head;
   Client *prev = NULL;
   // TODO: search on all desktops
@@ -165,80 +168,101 @@ static void remove_client(Client *client) {
     curr = curr->next;
   }
   if (curr != client) {
-    trace("Client not found\n");
+    trace("Client not found...");
     return;
   } else {
-    trace("Found client %p\n", curr);
+    trace("Found client(%p)...", curr);
+  }
+  if (curr == desktop.head) {
+    if (curr->next) {
+      trace("Replacing head...\n");
+      desktop.head = curr->next;
+    } else {
+      trace("Removing head...\n");
+      desktop.head = NULL;
+    }
   }
   if (prev && curr->next) {
     prev->next = curr->next;
-    trace("Replacing previous\n");
+    trace("Replacing previous...");
   } else if (prev) {
     prev->next = NULL;
   }
-  if (curr == desktop.head) {
-    desktop.head = NULL;
-    trace("Removing head\n");
-  }
 
-  print_desktop("after remove_client");
+  trace_desktop("after remove_client");
   free(curr);
 }
 
-static void destroy_notify(xcb_window_t window) {
-  trace("Destroying client\n");
+static void map_request(xcb_generic_event_t *event) {
+  trace("Handling XCB_MAP_REQUEST...");
+  xcb_window_t window = ((xcb_map_request_event_t*)event)->window;
+  xcb_map_window(connection, window);
+  fullscreen(window);
+  // TODO: malloc?
+  Client *c = malloc(sizeof(Client));
+  (*c).window = window;
+  (*c).next = NULL;
+  Client *p = desktop.head;
+  if (desktop.head == NULL) {
+    desktop.head = c;
+  } else {
+    while (p->next != NULL) {
+      p = p->next;
+    }
+    p->next = c;
+  }
+  trace("ok.\n");
+  tile();
+}
+
+static void destroy_notify(xcb_generic_event_t *event) {
+  trace("Handling XCB_DESTROY_NOTIFY...\n");
+  xcb_window_t window = ((xcb_destroy_notify_event_t*)event)->window;
   Client *client = get_client(window);
   remove_client(client);
+  trace("ok.\n");
+  tile();
+}
+
+typedef struct {
+  uint8_t type;
+  void (*func)(xcb_generic_event_t *event);
+} EventHandler;
+
+EventHandler event_handlers[] = {
+  { XCB_MAP_REQUEST, map_request },
+  { XCB_DESTROY_NOTIFY, destroy_notify }
+};
+
+static bool handle_event(xcb_generic_event_t *event) {
+  EventHandler *handler;
+  for (handler = event_handlers; handler->func; handler++) {
+    if (handler->type == (event->response_type & ~0x80)) {
+      handler->func(event);
+      return true;
+    }
+  }
 }
 
 static void event_loop() {
   xcb_generic_event_t *event;
   // TODO: switch to non-blocking xcb_poll_for_event
   while ((event = xcb_wait_for_event(connection))) {
-    trace("Received event %d, %d\n", event->response_type & ~0x80, event->response_type);
+    if (handle_event(event)) continue;
     switch (event->response_type & ~0x80) {
-      case XCB_MAP_REQUEST:
-        {
-          trace("MAP_REQUEST\n");
-          xcb_window_t window = ((xcb_map_request_event_t*)event)->window;
-          xcb_map_window(connection, window);
-          fullscreen(window);
-          // TODO: malloc?
-          Client *c = malloc(sizeof(Client));
-          (*c).window = window;
-          (*c).next = NULL;
-          Client *p = desktop.head;
-          if (desktop.head == NULL) {
-            desktop.head = c;
-          } else {
-            while (p->next != NULL) {
-              p = p->next;
-            }
-            p->next = c;
-          }
-          trace("Head: %p, Next: %p\n", desktop.head, desktop.head->next);
-          if (desktop.head->next != NULL)
-            trace("Next: %p, Next Next: %p\n", desktop.head->next, desktop.head->next->next);
-          tile();
-          break;
-        }
-
-      case XCB_CONFIGURE_NOTIFY: trace("XCB_CONFIGURE_NOTIFY\n"); break;
-      case XCB_EXPOSE: trace("EXPOSE\n"); break;
-      case XCB_BUTTON_PRESS: trace("BUTTON_PRESS\n"); break;
-                             // SubstructureNotify
-      case XCB_DESTROY_NOTIFY: 
-                             {
-                               trace("XCB_DESTROY_NOTIFY\n");
-                               xcb_window_t window = ((xcb_destroy_notify_event_t*)event)->window;
-                               destroy_notify(window);
-                               tile();
-                               break;
-                             }
-      case XCB_UNMAP_NOTIFY: trace("XCB_UNMAP_NOTIFY\n"); break;
-      case XCB_MAP_NOTIFY: trace("XCB_MAP_NOTIFY\n"); break;
+      case XCB_CONFIGURE_NOTIFY:
+        trace("Ignoring XCB_CONFIGURE_NOTIFY.\n"); break;
+      case XCB_EXPOSE:
+        trace("Ignoring XCB_EXPOSE.\n"); break;
+      case XCB_BUTTON_PRESS:
+        trace("Ignoring XCB_BUTTON_PRESS.\n"); break;
+        // SubstructureNotify
+      case XCB_UNMAP_NOTIFY:
+        trace("Ignoring XCB_UNMAP_NOTIFY.\n"); break;
+      case XCB_MAP_NOTIFY:
+        trace("Ignoring XCB_MAP_NOTIFY.\n"); break;
       default:
-                           break;
+        trace("Ignoring UNKNOWN event %d\n", event->response_type & ~0x80); break;
     }
     xcb_flush(connection);
     free(event);
@@ -246,9 +270,11 @@ static void event_loop() {
 }
 
 int main() {
-  trace("Initializing rwm\n");
-  connect();
-  setup();
+  trace("Initializing rwm...\n");
+  step("Connect", connect);
+  step("Signals", setup_signals);
+  step("Screen", setup_screen);
+  step("Subscriptions", setup_subscriptions);
   event_loop();
   disconnect();
   return 0;
