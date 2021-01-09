@@ -154,43 +154,13 @@ static void trace_desktop(char * message) {
 }
 
 static void remove_client(Client *client) {
-  trace("Removing client(%p)...", client);
-  if (client == NULL) {
-    trace("Client is NULL...");
-    return;
-  }
-  trace_desktop("Before remove_client\n");
-  Client *curr = desktop.head;
-  Client *prev = NULL;
-  // TODO: search on all desktops
-  while (curr != NULL && curr != client) {
-    prev = curr;
-    curr = curr->next;
-  }
-  if (curr != client) {
-    trace("Client not found...");
-    return;
-  } else {
-    trace("Found client(%p)...", curr);
-  }
-  if (curr == desktop.head) {
-    if (curr->next) {
-      trace("Replacing head...\n");
-      desktop.head = curr->next;
-    } else {
-      trace("Removing head...\n");
-      desktop.head = NULL;
-    }
-  }
-  if (prev && curr->next) {
-    prev->next = curr->next;
-    trace("Replacing previous...");
-  } else if (prev) {
-    prev->next = NULL;
-  }
-
-  trace_desktop("after remove_client");
-  free(curr);
+  // TODO: should not happen;
+  if (client == NULL) return;
+  Client *c, *p;
+  for (c = desktop.head; c != client; c=c->next) p=c;
+  if (p) p->next = c->next;
+  if (c == desktop.head && c->next == NULL) desktop.head = NULL;
+  free(client);
 }
 
 static void map_request(xcb_generic_event_t *event) {
@@ -198,7 +168,6 @@ static void map_request(xcb_generic_event_t *event) {
   xcb_window_t window = ((xcb_map_request_event_t*)event)->window;
   xcb_map_window(connection, window);
   fullscreen(window);
-  // TODO: malloc?
   Client *c = malloc(sizeof(Client));
   (*c).window = window;
   (*c).next = NULL;
@@ -271,10 +240,10 @@ static void event_loop() {
 
 int main() {
   trace("Initializing rwm...\n");
-  step("Connect", connect);
-  step("Signals", setup_signals);
+  step("Connection", connect);
+  step("Signaling", setup_signals);
   step("Screen", setup_screen);
-  step("Subscriptions", setup_subscriptions);
+  step("Subscribing", setup_subscriptions);
   event_loop();
   disconnect();
   return 0;
