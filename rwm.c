@@ -50,13 +50,31 @@ static void handle_signal(int signal) {
   exit(0);
 }
 
+static void trace_desktop(char * message) {
+  Client *c = desktop.head;
+  int i = 0;
+  trace("%s\n", message);
+  while (c != NULL) {
+    trace("%d - %p\n", ++i, c);
+    c=c->next;
+  }
+}
+
 static void remove_client(Client *client) {
   // TODO: should not happen;
-  if (client == NULL) return;
+  if (client == NULL) {
+    trace("ERR: client is NULL...");
+    return;
+  }
   Client *c, *p;
   for (c = desktop.head; c != client; c=c->next) p=c;
-  if (p) p->next = c->next;
+  // TODO: should not happen;
+  if (c != client) {
+    trace("ERR: could not found client...");
+    free(client);
+  }
   if (c == desktop.head && c->next == NULL) desktop.head = NULL;
+  if (c && p) p->next = c->next;
   free(client);
 }
 
@@ -68,25 +86,13 @@ static Client* create_client(xcb_window_t window) {
 }
 
 static void add_client(Client *client) {
-  Client *c = desktop.head;
   if (desktop.head == NULL) {
     desktop.head = client;
-  } else {
-    while (c->next != NULL) {
-      c = c->next;
-    }
-    c->next = client;
+    return;
   }
-}
-
-static void trace_desktop(char * message) {
   Client *c = desktop.head;
-  int i = 0;
-  trace("%s\n", message);
-  while (c != NULL) {
-    trace("%d - %p\n", ++i, c);
-    c=c->next;
-  }
+  while (c->next) c = c->next;
+  c->next = client;
 }
 
 static void setup_signals() {
@@ -152,11 +158,13 @@ static void setup_windows() {
   // TODO: check for error
   if ((reply = xcb_query_tree_reply(connection, xcb_query_tree(connection, screen->root), NULL))) {
     xcb_window_t *windows = xcb_query_tree_children(reply);
-    int i;
-    for (i = 0; i < xcb_query_tree_children_length(reply); i++) {
+    int i, len;
+    len = xcb_query_tree_children_length(reply);
+    for (i = 0; i < len; i++) {
       add_client(create_client(windows[i]));
     }
-    trace("Found %d windows...", i + 1);
+    trace("found %d windows...", i);
+    xcb_flush(connection);
     free(reply);
   }
 }
