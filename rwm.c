@@ -11,6 +11,16 @@ static xcb_connection_t *connection;
 static int screenNumber;
 static xcb_screen_t *screen;
 
+typedef struct Client {
+  xcb_window_t window;
+  struct Client *next;
+} Client;
+
+typedef struct {
+  Client *head;
+} Desktop;
+static Desktop desktop = { NULL };
+
 static void disconnect() {
   xcb_disconnect(connection);
 }
@@ -28,7 +38,7 @@ static void step(char *step_name, void (*func)(void)) {
 }
 
 static void connect() {
-  connection = xcb_connect(NULL, NULL);
+  connection = xcb_connect(NULL, &screenNumber);
   if (xcb_connection_has_error(connection))  {
     die("Connection error.");
   }
@@ -98,17 +108,6 @@ static void setup_subscriptions() {
   }
 }
 
-typedef struct Client {
-  xcb_window_t window;
-  struct Client *next;
-} Client;
-
-typedef struct {
-  Client *head;
-} Desktop;
-
-static Desktop desktop = { NULL };
-
 static void tile() {
   int totalClients = 0;
   Client *c = desktop.head;
@@ -136,10 +135,9 @@ static void fullscreen(xcb_window_t window) {
 }
 
 static Client* get_client(xcb_window_t window) {
-  Client *c = desktop.head;
+  Client *c;
   // TODO: search on all desktops
-  while (c != NULL && c->window != window) c=c->next;
-  trace("Found client %p\n", c);
+  for (c=desktop.head; c && c->window != window; c=c->next);
   return c;
 }
 
@@ -185,7 +183,7 @@ static void map_request(xcb_generic_event_t *event) {
 }
 
 static void destroy_notify(xcb_generic_event_t *event) {
-  trace("Handling XCB_DESTROY_NOTIFY...\n");
+  trace("Handling XCB_DESTROY_NOTIFY...");
   xcb_window_t window = ((xcb_destroy_notify_event_t*)event)->window;
   Client *client = get_client(window);
   remove_client(client);
@@ -219,17 +217,22 @@ static void event_loop() {
   while ((event = xcb_wait_for_event(connection))) {
     if (handle_event(event)) continue;
     switch (event->response_type & ~0x80) {
-      case XCB_CONFIGURE_NOTIFY:
-        trace("Ignoring XCB_CONFIGURE_NOTIFY.\n"); break;
       case XCB_EXPOSE:
         trace("Ignoring XCB_EXPOSE.\n"); break;
       case XCB_BUTTON_PRESS:
         trace("Ignoring XCB_BUTTON_PRESS.\n"); break;
-        // SubstructureNotify
-      case XCB_UNMAP_NOTIFY:
-        trace("Ignoring XCB_UNMAP_NOTIFY.\n"); break;
+      case XCB_CONFIGURE_REQUEST:
+        trace("Ignoring XCB_CONFIGURE_REQUEST.\n"); break;
+      case XCB_CLIENT_MESSAGE:
+        trace("Ignoring XCB_CLIENT_MESSAGE.\n"); break;
+      case XCB_CREATE_NOTIFY:
+        trace("Ignoring XCB_CREATE_NOTIFY.\n"); break;
+      case XCB_CONFIGURE_NOTIFY:
+        trace("Ignoring XCB_CONFIGURE_NOTIFY.\n"); break;
       case XCB_MAP_NOTIFY:
         trace("Ignoring XCB_MAP_NOTIFY.\n"); break;
+      case XCB_UNMAP_NOTIFY:
+        trace("Ignoring XCB_UNMAP_NOTIFY.\n"); break;
       default:
         trace("Ignoring UNKNOWN event %d\n", event->response_type & ~0x80); break;
     }
