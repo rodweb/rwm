@@ -4,6 +4,8 @@
 #include <signal.h>
 #include <xcb/xcb.h>
 
+#define trace(...) printf(__VA_ARGS__); fflush(stdout);
+
 static xcb_connection_t *connection;
 static int screenNumber;
 static xcb_screen_t *screen;
@@ -13,7 +15,7 @@ static void disconnect() {
 }
 
 static void die(char* message) {
-  printf("%s\n", message);
+  trace("%s\n", message);
   disconnect();
   exit(1);
 }
@@ -23,11 +25,11 @@ static void connect() {
   if (xcb_connection_has_error(connection))  {
     die("Connection error.");
   }
-  printf("Current screen is %d\n", screenNumber);
+  trace("Current screen is %d\n", screenNumber);
 }
 
 static void handle_signal(int signal) {
-  printf("Caught signal %d\n", signal);
+  trace("Caught signal %d\n", signal);
   disconnect();
   exit(0);
 }
@@ -71,7 +73,7 @@ static void subscribe() {
   xcb_generic_error_t *error = xcb_request_check(connection, cookie);
   // TODO: check error code
   if (error) {
-    printf("Received error code %d.\n", error->error_code);
+    trace("Received error code %d.\n", error->error_code);
     die("Window manager already running.");
   }
   xcb_flush(connection);
@@ -88,7 +90,7 @@ static void setup() {
     xcb_screen_next(&iterator);
   }
   screen = iterator.data;
-  printf("Screen is %dx%d\n", screen->width_in_pixels, screen->height_in_pixels);
+  trace("Screen is %dx%d\n", screen->width_in_pixels, screen->height_in_pixels);
   subscribe();
 }
 
@@ -106,16 +108,13 @@ static Desktop desktop = { NULL };
 static void tile() {
   int totalClients = 0;
   Client *c = desktop.head;
-  printf("Counting\n");
-  fflush(stdout);
+  trace("Counting\n");
   while (c != NULL) {
-    printf("i = %d, %p\n", totalClients, c);
-    fflush(stdout);
+    trace("i = %d, %p\n", totalClients, c);
     totalClients++;
     c = c->next;
   }
-  printf("Total clients %d\n", totalClients);
-  fflush(stdout);
+  trace("Total clients %d\n", totalClients);
 }
 
 static void fullscreen(xcb_window_t window) {
@@ -137,27 +136,24 @@ static Client* get_client(xcb_window_t window) {
   Client *c = desktop.head;
   // TODO: search on all desktops
   while (c != NULL && c->window != window) c=c->next;
-  printf("Found client %p\n", c);
+  trace("Found client %p\n", c);
   return c;
 }
 
 static void print_desktop(char * message) {
   Client *c = desktop.head;
   int i = 0;
-  printf("%s\n", message);
+  trace("%s\n", message);
   while (c != NULL) {
-    printf("%d - %p\n", ++i, c);
+    trace("%d - %p\n", ++i, c);
     c=c->next;
   }
-  fflush(stdout);
 }
 
 static void remove_client(Client *client) {
-  printf("Removing client %p\n", client);
-  fflush(stdout);
+  trace("Removing client %p\n", client);
   if (client == NULL) {
-    printf("Client is NULL.\n");
-    fflush(stdout);
+    trace("Client is NULL.\n");
     return;
   }
   print_desktop("before remove_client");
@@ -169,34 +165,28 @@ static void remove_client(Client *client) {
     curr = curr->next;
   }
   if (curr != client) {
-    printf("Client not found\n");
-    fflush(stdout);
+    trace("Client not found\n");
     return;
   } else {
-    printf("Found client %p\n", curr);
-    fflush(stdout);
+    trace("Found client %p\n", curr);
   }
   if (prev && curr->next) {
     prev->next = curr->next;
-    printf("Replacing previous\n");
-    fflush(stdout);
+    trace("Replacing previous\n");
   } else if (prev) {
     prev->next = NULL;
   }
   if (curr == desktop.head) {
     desktop.head = NULL;
-    printf("Removing head\n");
-    fflush(stdout);
+    trace("Removing head\n");
   }
 
   print_desktop("after remove_client");
-  fflush(stdout);
   free(curr);
 }
 
 static void destroy_notify(xcb_window_t window) {
-  printf("Destroying client\n");
-  fflush(stdout);
+  trace("Destroying client\n");
   Client *client = get_client(window);
   remove_client(client);
 }
@@ -205,11 +195,11 @@ static void event_loop() {
   xcb_generic_event_t *event;
   // TODO: switch to non-blocking xcb_poll_for_event
   while ((event = xcb_wait_for_event(connection))) {
-    printf("Received event %d, %d\n", event->response_type & ~0x80, event->response_type);
+    trace("Received event %d, %d\n", event->response_type & ~0x80, event->response_type);
     switch (event->response_type & ~0x80) {
       case XCB_MAP_REQUEST:
         {
-          printf("MAP_REQUEST\n");
+          trace("MAP_REQUEST\n");
           xcb_window_t window = ((xcb_map_request_event_t*)event)->window;
           xcb_map_window(connection, window);
           fullscreen(window);
@@ -226,38 +216,37 @@ static void event_loop() {
             }
             p->next = c;
           }
-          printf("Head: %p, Next: %p\n", desktop.head, desktop.head->next);
+          trace("Head: %p, Next: %p\n", desktop.head, desktop.head->next);
           if (desktop.head->next != NULL)
-            printf("Next: %p, Next Next: %p\n", desktop.head->next, desktop.head->next->next);
+            trace("Next: %p, Next Next: %p\n", desktop.head->next, desktop.head->next->next);
           tile();
           break;
         }
 
-      case XCB_CONFIGURE_NOTIFY: printf("XCB_CONFIGURE_NOTIFY\n"); break;
-      case XCB_EXPOSE: printf("EXPOSE\n"); break;
-      case XCB_BUTTON_PRESS: printf("BUTTON_PRESS\n"); break;
+      case XCB_CONFIGURE_NOTIFY: trace("XCB_CONFIGURE_NOTIFY\n"); break;
+      case XCB_EXPOSE: trace("EXPOSE\n"); break;
+      case XCB_BUTTON_PRESS: trace("BUTTON_PRESS\n"); break;
                              // SubstructureNotify
       case XCB_DESTROY_NOTIFY: 
                              {
-                               printf("XCB_DESTROY_NOTIFY\n");
+                               trace("XCB_DESTROY_NOTIFY\n");
                                xcb_window_t window = ((xcb_destroy_notify_event_t*)event)->window;
                                destroy_notify(window);
                                tile();
                                break;
                              }
-      case XCB_UNMAP_NOTIFY: printf("XCB_UNMAP_NOTIFY\n"); break;
-      case XCB_MAP_NOTIFY: printf("XCB_MAP_NOTIFY\n"); break;
+      case XCB_UNMAP_NOTIFY: trace("XCB_UNMAP_NOTIFY\n"); break;
+      case XCB_MAP_NOTIFY: trace("XCB_MAP_NOTIFY\n"); break;
       default:
                            break;
     }
-    fflush(stdout);
     xcb_flush(connection);
     free(event);
   }
 }
 
 int main() {
-  printf("Initializing rwm\n");
+  trace("Initializing rwm\n");
   connect();
   setup();
   event_loop();
