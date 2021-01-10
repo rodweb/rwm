@@ -1,11 +1,16 @@
+#include <bits/types/struct_timeval.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
-#include <signal.h>
 #include <xcb/xcb.h>
 
 #define trace(...) printf(__VA_ARGS__); fflush(stdout);
+#define MAX(A,B) ((A) > (B) ? (A) : (B))
 
 static xcb_connection_t *connection;
 static int screenNumber;
@@ -37,7 +42,7 @@ static void step(char *step_name, void (*func)(void)) {
   trace("ok.\n");
 }
 
-static void connect() {
+static void open_connection() {
   connection = xcb_connect(NULL, &screenNumber);
   if (xcb_connection_has_error(connection))  {
     die("Connection error.");
@@ -242,43 +247,108 @@ static bool handle_event(xcb_generic_event_t *event) {
   return false;
 }
 
-static void event_loop() {
-  xcb_generic_event_t *event;
-  // TODO: switch to non-blocking xcb_poll_for_event
-  while ((event = xcb_wait_for_event(connection))) {
-    if (handle_event(event)) {
-      xcb_flush(connection);
-      free(event);
-      continue;
-    }
-    switch (event->response_type & ~0x80) {
-      case XCB_EXPOSE:
-        trace("Ignoring XCB_EXPOSE.\n"); break;
-      case XCB_BUTTON_PRESS:
-        trace("Ignoring XCB_BUTTON_PRESS.\n"); break;
-      case XCB_CONFIGURE_REQUEST:
-        trace("Ignoring XCB_CONFIGURE_REQUEST.\n"); break;
-      case XCB_CLIENT_MESSAGE:
-        trace("Ignoring XCB_CLIENT_MESSAGE.\n"); break;
-      case XCB_CREATE_NOTIFY:
-        trace("Ignoring XCB_CREATE_NOTIFY.\n"); break;
-      case XCB_CONFIGURE_NOTIFY:
-        trace("Ignoring XCB_CONFIGURE_NOTIFY.\n"); break;
-      case XCB_MAP_NOTIFY:
-        trace("Ignoring XCB_MAP_NOTIFY.\n"); break;
-      case XCB_UNMAP_NOTIFY:
-        trace("Ignoring XCB_UNMAP_NOTIFY.\n"); break;
-      default:
-        trace("Ignoring UNKNOWN event %d\n", event->response_type & ~0x80); break;
-    }
-    xcb_flush(connection);
-    free(event);
+static void print_unhandled(xcb_generic_event_t *event) {
+  switch (event->response_type & ~0x80) {
+    case XCB_EXPOSE:
+      trace("Ignoring XCB_EXPOSE.\n"); break;
+    case XCB_BUTTON_PRESS:
+      trace("Ignoring XCB_BUTTON_PRESS.\n"); break;
+    case XCB_CONFIGURE_REQUEST:
+      trace("Ignoring XCB_CONFIGURE_REQUEST.\n"); break;
+    case XCB_CLIENT_MESSAGE:
+      trace("Ignoring XCB_CLIENT_MESSAGE.\n"); break;
+    case XCB_CREATE_NOTIFY:
+      trace("Ignoring XCB_CREATE_NOTIFY.\n"); break;
+    case XCB_CONFIGURE_NOTIFY:
+      trace("Ignoring XCB_CONFIGURE_NOTIFY.\n"); break;
+    case XCB_MAP_NOTIFY:
+      trace("Ignoring XCB_MAP_NOTIFY.\n"); break;
+    case XCB_UNMAP_NOTIFY:
+      trace("Ignoring XCB_UNMAP_NOTIFY.\n"); break;
+    default:
+      trace("Ignoring UNKNOWN event %d\n", event->response_type & ~0x80); break;
   }
+}
+
+#define BUFFER 1024
+static void event_loop() {
+  int sock = 0;
+  // TODO: reduce max
+  int max_fd = FD_SETSIZE;
+  char socket_path[256] = "/tmp/rwm-socket";
+  unlink(socket_path);
+  struct sockaddr_un socket_address;
+  socket_address.sun_family = AF_UNIX;
+  strncpy(socket_address.sun_path, socket_path, sizeof(socket_address.sun_path) -1);
+
+  if ((sock = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
+    die("Could not create socket\n.");
+  }
+  if (bind(sock, (struct sockaddr*)&socket_address, sizeof(socket_address)) < 0) {
+    die("Could not bind socket\n.");
+  }
+  if (listen(sock, 1) < 0) {
+    die("Could not listen to socket.\n");
+  }
+
+  fd_set active_fd_set, read_fd_set;
+  FD_ZERO(&active_fd_set);
+  FD_SET(sock, &active_fd_set);
+
+  xcb_generic_event_t *event;
+  bool running = true;
+  /* struct timeval timeout = { 1, 0 }; */
+  do {
+    xcb_flush(connection);
+
+    read_fd_set = active_fd_set;
+    if (select(max_fd, &read_fd_set, NULL, NULL, NULL) < 0) {
+      die("Could not select.\n");
+    }
+
+    for (int i = 0; i < max_fd; i++) {
+      if (FD_ISSET(i, &read_fd_set)) {
+        trace("Socket is set(%d)\n", i);
+        if (i == sock) {
+          trace("Checking for new connections...");
+          int fd;
+          if ((fd = accept(sock, NULL, 0)) < 0) {
+            die("Could not accept(%d).\n");
+          }
+          if (fd > 0) {
+            FD_SET(fd, &active_fd_set);
+            trace("accepted.\n");
+          }
+        } else {
+          trace("Reading from client...\n");
+          char buffer[BUFFER];
+          int readbytes = read(i, buffer, BUFFER);
+          if (readbytes < 0) {
+            trace("Could not read.\n");
+          } else if (readbytes > 0) {
+            trace("Received '%s' from(%d).\n", buffer, i);
+            char* reply = "ok";
+            send(i, reply, strlen(reply), 0);
+          }
+          close(i);
+          FD_CLR(i, &active_fd_set);
+        }
+      }
+    }
+
+    while ((event = xcb_poll_for_event(connection))) {
+      if (handle_event(event)) continue;
+      else print_unhandled(event);
+      free(event);
+    }
+    // TODO: remove sleep
+    sleep(1);
+  } while (running);
 }
 
 int main() {
   trace("Initializing rwm...\n");
-  step("Connection", connect);
+  step("Connection", open_connection);
   step("Signaling", setup_signals);
   step("Screens", setup_screens);
   step("Windows", setup_windows);
