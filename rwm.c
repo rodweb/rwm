@@ -118,6 +118,7 @@ static void setup_subscriptions() {
   const static uint32_t values[] = {
     XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT
       | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
+      | XCB_EVENT_MASK_PROPERTY_CHANGE
       /* XCB_EVENT_MASK_EXPOSURE */
       /*   | XCB_EVENT_MASK_KEY_PRESS */
       /*   | XCB_EVENT_MASK_KEY_RELEASE */
@@ -174,15 +175,46 @@ static void setup_windows() {
   }
 }
 
+static void set_window_position(xcb_window_t window, uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
+  uint16_t mask =
+    XCB_CONFIG_WINDOW_X
+    | XCB_CONFIG_WINDOW_Y
+    | XCB_CONFIG_WINDOW_WIDTH
+    | XCB_CONFIG_WINDOW_HEIGHT;
+  uint32_t values[] = { x, y, w, h };
+  xcb_configure_window(connection, window, mask, values);
+}
+
 static void tile() {
-  int totalClients = 0;
+  int window_count = 0;
   Client *c = desktop.head;
-  trace("Tiling...");
+  trace("Tiling...\n");
   while (c != NULL) {
-    totalClients++;
+    window_count++;
     c = c->next;
   }
-  trace("ok(%d).\n", totalClients);
+  if (window_count == 0) return;
+  uint32_t max_width = screen->width_in_pixels;
+  uint32_t max_height = screen->height_in_pixels;
+  uint32_t main_width = window_count > 1 ? max_width / 2 : max_width;
+  uint32_t stack_width = main_width;
+  uint32_t stack_height = window_count > 1 ? max_height / (window_count - 1) : 0;
+
+  int i = 0;
+  c = desktop.head;
+  while (c != NULL) {
+    if (i == 0) {
+      trace("Tiling main window at (%d, %d) size (%d, %d).\n", 0, 0, main_width, max_height);
+      set_window_position(c->window, 0, 0, main_width, max_height);
+    } else {
+      trace("Tiling stack window (%d) at (%d, %d) size (%d, %d).\n", (i - 1), main_width, stack_height * (i - 1), stack_width, stack_height);
+      set_window_position(c->window, main_width, stack_height * (i - 1), stack_width, stack_height);
+    }
+    c = c->next;
+    i++;
+    xcb_flush(connection); // TODO: remove?
+  }
+  trace("ok(%d).\n", window_count);
 }
 
 static void set_fullscreen(xcb_window_t window) {
@@ -212,8 +244,10 @@ static void map_request(xcb_generic_event_t *event) {
   trace("Handling XCB_MAP_REQUEST...");
   xcb_window_t window = ((xcb_map_request_event_t*)event)->window;
   xcb_map_window(connection, window);
-  set_fullscreen(window);
+  /* set_fullscreen(window); */
   add_client(create_client(window));
+  uint32_t values[] = { XCB_EVENT_MASK_PROPERTY_CHANGE };
+  xcb_change_window_attributes_checked(connection, window, XCB_CW_EVENT_MASK, values);
   trace("ok.\n");
   tile();
 }
@@ -241,6 +275,7 @@ static bool handle_event(xcb_generic_event_t *event) {
   for (handler = event_handlers; handler->func; handler++) {
     if (handler->type == (event->response_type & ~0x80)) {
       handler->func(event);
+      free(event);
       return true;
     }
   }
@@ -265,6 +300,8 @@ static void print_unhandled(xcb_generic_event_t *event) {
       trace("Ignoring XCB_MAP_NOTIFY.\n"); break;
     case XCB_UNMAP_NOTIFY:
       trace("Ignoring XCB_UNMAP_NOTIFY.\n"); break;
+    case XCB_PROPERTY_NOTIFY:
+      trace("Ignoring XCB_PROPERTY_NOTIFY.\n"); break;
     default:
       trace("Ignoring UNKNOWN event %d\n", event->response_type & ~0x80); break;
   }
@@ -297,12 +334,10 @@ static void event_loop() {
 
   xcb_generic_event_t *event;
   bool running = true;
-  /* struct timeval timeout = { 1, 0 }; */
+  struct timeval timeout = { 0, 100 };
   do {
-    xcb_flush(connection);
-
     read_fd_set = active_fd_set;
-    if (select(max_fd, &read_fd_set, NULL, NULL, NULL) < 0) {
+    if (select(max_fd, &read_fd_set, NULL, NULL, &timeout) < 0) {
       die("Could not select.\n");
     }
 
@@ -338,9 +373,10 @@ static void event_loop() {
 
     while ((event = xcb_poll_for_event(connection))) {
       if (handle_event(event)) continue;
-      else print_unhandled(event);
+      print_unhandled(event);
       free(event);
     }
+    xcb_flush(connection);
     // TODO: remove sleep
     sleep(1);
   } while (running);
