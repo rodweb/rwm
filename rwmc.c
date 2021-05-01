@@ -3,6 +3,7 @@
 #include <unistd.h> /* pause() */
 #include <sys/un.h>
 #include <sys/socket.h>
+#include "common.h"
 
 int main() {
   int sock = 0;
@@ -11,10 +12,9 @@ int main() {
     exit(EXIT_FAILURE);
   }
 
-  char socket_path[256] = "/tmp/rwm-socket";
   struct sockaddr_un socket_address;
   socket_address.sun_family = AF_UNIX;
-  strncpy(socket_address.sun_path, socket_path, sizeof(socket_address.sun_path) -1);
+  strncpy(socket_address.sun_path, RWM_SOCK_PATH, sizeof(socket_address.sun_path) -1);
 
   if (connect(sock, (struct sockaddr*)&socket_address, sizeof(socket_address)) < 0) {
     perror("connection failed");
@@ -23,10 +23,10 @@ int main() {
   printf("connected\n");
 
   char *message = "Ping from client";
-  char buffer[1024] = {0};
+  char buffer[BUF_SIZE] = {0};
   send(sock, message, strlen(message), 0);
   printf("Message sent\n");
-  read(sock, buffer, 1024);
+  read(sock, buffer, BUF_SIZE);
   printf("%s\n", buffer);
   return 0;
 }

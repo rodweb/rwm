@@ -8,6 +8,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <xcb/xcb.h>
+#include "common.h"
 
 #define trace(...) printf(__VA_ARGS__); fflush(stdout);
 #define MAX(A,B) ((A) > (B) ? (A) : (B))
@@ -307,16 +308,14 @@ static void print_unhandled(xcb_generic_event_t *event) {
   }
 }
 
-#define BUFFER 1024
 static void event_loop() {
   int sock = 0;
   // TODO: reduce max
   int max_fd = FD_SETSIZE;
-  char socket_path[256] = "/tmp/rwm-socket";
-  unlink(socket_path);
+  unlink(RWM_SOCK_PATH);
   struct sockaddr_un socket_address;
   socket_address.sun_family = AF_UNIX;
-  strncpy(socket_address.sun_path, socket_path, sizeof(socket_address.sun_path) -1);
+  strncpy(socket_address.sun_path, RWM_SOCK_PATH, sizeof(socket_address.sun_path) -1);
 
   if ((sock = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
     die("Could not create socket\n.");
@@ -356,8 +355,8 @@ static void event_loop() {
           }
         } else {
           trace("Reading from client...\n");
-          char buffer[BUFFER];
-          int readbytes = read(i, buffer, BUFFER);
+          char buffer[BUF_SIZE];
+          int readbytes = read(i, buffer, BUF_SIZE);
           if (readbytes < 0) {
             trace("Could not read.\n");
           } else if (readbytes > 0) {
