@@ -13,10 +13,11 @@ int main(int argc, char **argv) {
   }
 
   struct sockaddr_un socket_address;
+  memset(&socket_address, 0, sizeof(struct sockaddr_un));
   socket_address.sun_family = AF_UNIX;
-  strncpy(socket_address.sun_path, RWM_SOCK_PATH, sizeof(socket_address.sun_path) -1);
+  strncpy(socket_address.sun_path, RWM_SOCK_PATH, sizeof(socket_address.sun_path) - 1);
 
-  if (connect(socket_fd, (struct sockaddr*)&socket_address, sizeof(socket_address)) < 0) {
+  if (connect(socket_fd, (struct sockaddr*)&socket_address, sizeof(struct sockaddr_un)) < 0) {
     perror("connection failed");
     exit(EXIT_FAILURE);
   }

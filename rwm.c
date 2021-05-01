@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -66,11 +67,11 @@ static void trace_desktop(char * message) {
   }
 }
 
-static void remove_client(Client *client) {
+static bool remove_client(Client *client) {
   // TODO: should not happen;
   if (client == NULL) {
     trace("ERR: client is NULL...");
-    return;
+    return false;
   }
   Client *c, *p;
   for (c = desktop.head; c != client; c=c->next) p=c;
@@ -82,6 +83,7 @@ static void remove_client(Client *client) {
   if (c == desktop.head && c->next == NULL) desktop.head = NULL;
   if (c != NULL && p != NULL) p->next = c->next;
   free(client);
+  return true;
 }
 
 static Client* create_client(xcb_window_t window) {
@@ -256,9 +258,9 @@ static void map_request(xcb_generic_event_t *event) {
 static void destroy_notify(xcb_generic_event_t *event) {
   trace("Handling XCB_DESTROY_NOTIFY...");
   xcb_window_t window = ((xcb_destroy_notify_event_t*)event)->window;
-  remove_client(get_client(window));
+  bool removed = remove_client(get_client(window));
+  if (removed) tile();
   trace("ok.\n");
-  tile();
 }
 
 typedef struct EventHandler {
@@ -312,17 +314,22 @@ static void event_loop() {
   unlink(RWM_SOCK_PATH);
 
   struct sockaddr_un socket_address;
+  if (strlen(RWM_SOCK_PATH) > sizeof(socket_address.sun_path) - 1) {
+    die("Socket path too long");
+  }
+
+  memset(&socket_address, 0, sizeof(struct sockaddr_un));
   socket_address.sun_family = AF_UNIX;
-  strncpy(socket_address.sun_path, RWM_SOCK_PATH, sizeof(socket_address.sun_path) -1);
+  strncpy(socket_address.sun_path, RWM_SOCK_PATH, sizeof(socket_address.sun_path) - 1);
 
   int socket_fd = 0;
   if ((socket_fd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
     die("Could not create socket\n.");
   }
-  if (bind(socket_fd, (struct sockaddr*)&socket_address, sizeof(socket_address)) < 0) {
+  if (bind(socket_fd, (struct sockaddr*)&socket_address, sizeof(struct sockaddr_un)) < 0) {
     die("Could not bind socket\n.");
   }
-  if (listen(socket_fd, 1) < 0) {
+  if (listen(socket_fd, BACKLOG) < 0) {
     die("Could not listen to socket.\n");
   }
 
@@ -344,7 +351,6 @@ static void event_loop() {
 
     for (int fd = 0; fd < max_fd; fd++) {
       if (FD_ISSET(fd, &read_fd_set)) {
-        trace("Socket is set(%d)\n", fd);
         if (fd == socket_fd) {
           trace("Checking for new connections...");
           int client_fd;
@@ -366,7 +372,9 @@ static void event_loop() {
               running = false;
             }
           }
-          close(client_fd);
+          if (close(client_fd) < 0) {
+            trace("Coult not close (%s)", client_fd);
+          }
           trace("Closed (%d).\n", client_fd);
         } else if (fd == display_fd) {
           while ((event = xcb_poll_for_event(connection))) {
