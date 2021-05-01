@@ -1,4 +1,5 @@
 #include <bits/types/struct_timeval.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -172,7 +173,7 @@ static void setup_windows() {
     for (i = 0; i < len; i++) {
       add_client(create_client(windows[i]));
     }
-    trace("found %d windows...", i);
+    trace("found %d...", i);
     xcb_flush(connection);
     free(reply);
   }
@@ -310,6 +311,7 @@ static void print_unhandled(xcb_generic_event_t *event) {
   }
 }
 
+bool running = true;
 static void event_loop() {
   unlink(RWM_SOCK_PATH);
 
@@ -318,11 +320,17 @@ static void event_loop() {
     die("Socket path too long");
   }
 
+  if (remove(RWM_SOCK_PATH) < 0 && errno != ENOENT) {
+    die("Could not remove socket file");
+  }
+
   memset(&socket_address, 0, sizeof(struct sockaddr_un));
   socket_address.sun_family = AF_UNIX;
   strncpy(socket_address.sun_path, RWM_SOCK_PATH, sizeof(socket_address.sun_path) - 1);
 
+  int display_fd = xcb_get_file_descriptor(connection);
   int socket_fd = 0;
+
   if ((socket_fd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
     die("Could not create socket\n.");
   }
@@ -333,8 +341,6 @@ static void event_loop() {
     die("Could not listen to socket.\n");
   }
 
-  int display_fd = xcb_get_file_descriptor(connection);
-
   fd_set active_fd_set, read_fd_set;
   FD_ZERO(&active_fd_set);
   FD_SET(socket_fd, &active_fd_set);
@@ -342,40 +348,38 @@ static void event_loop() {
 
   int max_fd = MAX(socket_fd, display_fd);
   xcb_generic_event_t *event;
-  bool running = true;
   do {
     read_fd_set = active_fd_set;
-    if (select(max_fd, &read_fd_set, NULL, NULL, NULL) < 0) {
+    if (select(max_fd + 1, &read_fd_set, NULL, NULL, NULL) < 0) {
       die("Could not select.\n");
     }
 
-    for (int fd = 0; fd < max_fd; fd++) {
+    for (int fd = 0; fd <= max_fd; fd++) {
       if (FD_ISSET(fd, &read_fd_set)) {
         if (fd == socket_fd) {
-          trace("Checking for new connections...");
+          trace("Checking for new connections...\n");
           int client_fd;
           if ((client_fd = accept(socket_fd, NULL, 0)) < 0) {
             die("Could not accept(%d).\n");
           }
-          if (client_fd <= 0) continue;
-          trace("accepted.\n");
           trace("Reading from client...\n");
           char buffer[BUFFER_SIZE];
-          int readbytes = read(client_fd, buffer, BUFFER_SIZE);
-          if (readbytes < 0) {
+          int read_bytes = read(client_fd, buffer, BUFFER_SIZE);
+          if (read_bytes < 0) {
             trace("Could not read.\n");
-          } else if (readbytes > 0) {
+          } else if (read_bytes > 0) {
             trace("Received '%s' from(%d).\n", buffer, client_fd);
             if (strcmp(buffer, "quit") == 0) {
               char* reply = "quiting";
-              send(client_fd, reply, strlen(reply), 0);
+              if (send(client_fd, reply, strlen(reply), 0) != strlen(reply)) {
+                trace("Partial message sent.\n");
+              }
               running = false;
             }
           }
           if (close(client_fd) < 0) {
-            trace("Coult not close (%s)", client_fd);
+            trace("Could not close (%d).\n", client_fd);
           }
-          trace("Closed (%d).\n", client_fd);
         } else if (fd == display_fd) {
           while ((event = xcb_poll_for_event(connection))) {
             if (handle_event(event)) continue;
