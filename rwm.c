@@ -14,7 +14,7 @@
 #define MAX(A,B) ((A) > (B) ? (A) : (B))
 
 static xcb_connection_t *connection;
-static int screenNumber;
+static int screen_number;
 static xcb_screen_t *screen;
 
 typedef struct Client {
@@ -44,7 +44,7 @@ static void step(char *step_name, void (*func)(void)) {
 }
 
 static void open_connection() {
-  connection = xcb_connect(NULL, &screenNumber);
+  connection = xcb_connect(NULL, &screen_number);
   if (xcb_connection_has_error(connection))  {
     die("Connection error.");
   }
@@ -80,7 +80,7 @@ static void remove_client(Client *client) {
     free(client);
   }
   if (c == desktop.head && c->next == NULL) desktop.head = NULL;
-  if (c && p) p->next = c->next;
+  if (c != NULL && p != NULL) p->next = c->next;
   free(client);
 }
 
@@ -108,7 +108,7 @@ static void setup_signals() {
 static void setup_screens() {
   const xcb_setup_t *setup = xcb_get_setup(connection);
   xcb_screen_iterator_t iterator = xcb_setup_roots_iterator(setup);
-  for (int i = 0; i < screenNumber; i++) {
+  for (int i = 0; i < screen_number; i++) {
     xcb_screen_next(&iterator);
   }
   screen = iterator.data;
@@ -309,21 +309,20 @@ static void print_unhandled(xcb_generic_event_t *event) {
 }
 
 static void event_loop() {
-  int sock = 0;
-  // TODO: reduce max
-  int max_fd = FD_SETSIZE;
   unlink(RWM_SOCK_PATH);
+
   struct sockaddr_un socket_address;
   socket_address.sun_family = AF_UNIX;
   strncpy(socket_address.sun_path, RWM_SOCK_PATH, sizeof(socket_address.sun_path) -1);
 
-  if ((sock = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
+  int socket_fd = 0;
+  if ((socket_fd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
     die("Could not create socket\n.");
   }
-  if (bind(sock, (struct sockaddr*)&socket_address, sizeof(socket_address)) < 0) {
+  if (bind(socket_fd, (struct sockaddr*)&socket_address, sizeof(socket_address)) < 0) {
     die("Could not bind socket\n.");
   }
-  if (listen(sock, 1) < 0) {
+  if (listen(socket_fd, 1) < 0) {
     die("Could not listen to socket.\n");
   }
 
@@ -331,9 +330,10 @@ static void event_loop() {
 
   fd_set active_fd_set, read_fd_set;
   FD_ZERO(&active_fd_set);
-  FD_SET(sock, &active_fd_set);
+  FD_SET(socket_fd, &active_fd_set);
   FD_SET(display_fd, &active_fd_set);
 
+  int max_fd = MAX(socket_fd, display_fd);
   xcb_generic_event_t *event;
   bool running = true;
   do {
@@ -342,34 +342,33 @@ static void event_loop() {
       die("Could not select.\n");
     }
 
-    for (int i = 0; i < max_fd; i++) {
-      if (FD_ISSET(i, &read_fd_set)) {
-        trace("Socket is set(%d)\n", i);
-        if (i == sock) {
+    for (int fd = 0; fd < max_fd; fd++) {
+      if (FD_ISSET(fd, &read_fd_set)) {
+        trace("Socket is set(%d)\n", fd);
+        if (fd == socket_fd) {
           trace("Checking for new connections...");
-          int fd;
-          if ((fd = accept(sock, NULL, 0)) < 0) {
+          int client_fd;
+          if ((client_fd = accept(socket_fd, NULL, 0)) < 0) {
             die("Could not accept(%d).\n");
           }
-          if (fd > 0) {
-            trace("accepted.\n");
-            trace("Reading from client...\n");
-            char buffer[BUFFER_SIZE];
-            int readbytes = read(fd, buffer, BUFFER_SIZE);
-            if (readbytes < 0) {
-              trace("Could not read.\n");
-            } else if (readbytes > 0) {
-              trace("Received '%s' from(%d).\n", buffer, fd);
-              if (strcmp(buffer, "quit") == 0) {
-                char* reply = "quiting";
-                send(fd, reply, strlen(reply), 0);
-                running = false;
-              }
+          if (client_fd <= 0) continue;
+          trace("accepted.\n");
+          trace("Reading from client...\n");
+          char buffer[BUFFER_SIZE];
+          int readbytes = read(client_fd, buffer, BUFFER_SIZE);
+          if (readbytes < 0) {
+            trace("Could not read.\n");
+          } else if (readbytes > 0) {
+            trace("Received '%s' from(%d).\n", buffer, client_fd);
+            if (strcmp(buffer, "quit") == 0) {
+              char* reply = "quiting";
+              send(client_fd, reply, strlen(reply), 0);
+              running = false;
             }
-            close(fd);
-            trace("Closed (%d).\n", fd);
           }
-        } else if (i == display_fd) {
+          close(client_fd);
+          trace("Closed (%d).\n", client_fd);
+        } else if (fd == display_fd) {
           while ((event = xcb_poll_for_event(connection))) {
             if (handle_event(event)) continue;
             print_unhandled(event);
