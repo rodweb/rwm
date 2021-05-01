@@ -327,9 +327,12 @@ static void event_loop() {
     die("Could not listen to socket.\n");
   }
 
+  int display_fd = xcb_get_file_descriptor(connection);
+
   fd_set active_fd_set, read_fd_set;
   FD_ZERO(&active_fd_set);
   FD_SET(sock, &active_fd_set);
+  FD_SET(display_fd, &active_fd_set);
 
   xcb_generic_event_t *event;
   bool running = true;
@@ -366,18 +369,17 @@ static void event_loop() {
             close(fd);
             trace("Closed (%d).\n", fd);
           }
+        } else if (i == display_fd) {
+          while ((event = xcb_poll_for_event(connection))) {
+            if (handle_event(event)) continue;
+            print_unhandled(event);
+            free(event);
+          }
         }
       }
     }
 
-    while ((event = xcb_poll_for_event(connection))) {
-      if (handle_event(event)) continue;
-      print_unhandled(event);
-      free(event);
-    }
     xcb_flush(connection);
-    // TODO: remove sleep
-    sleep(1);
   } while (running);
 }
 
