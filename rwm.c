@@ -22,7 +22,7 @@ typedef struct Client {
   struct Client *next;
 } Client;
 
-typedef struct {
+typedef struct Desktop {
   Client *head;
 } Desktop;
 static Desktop desktop = { NULL };
@@ -34,7 +34,7 @@ static void disconnect() {
 static void die(char* message) {
   trace("%s\n", message);
   disconnect();
-  exit(1);
+  exit(EXIT_FAILURE);
 }
 
 static void step(char *step_name, void (*func)(void)) {
@@ -53,7 +53,7 @@ static void open_connection() {
 static void handle_signal(int signal) {
   trace("Caught signal %d\n", signal);
   disconnect();
-  exit(0);
+  exit(EXIT_SUCCESS);
 }
 
 static void trace_desktop(char * message) {
@@ -261,7 +261,7 @@ static void destroy_notify(xcb_generic_event_t *event) {
   tile();
 }
 
-typedef struct {
+typedef struct EventHandler {
   uint8_t type;
   void (*func)(xcb_generic_event_t *event);
 } EventHandler;
@@ -333,10 +333,9 @@ static void event_loop() {
 
   xcb_generic_event_t *event;
   bool running = true;
-  struct timeval timeout = { 0, 100 };
   do {
     read_fd_set = active_fd_set;
-    if (select(max_fd, &read_fd_set, NULL, NULL, &timeout) < 0) {
+    if (select(max_fd, &read_fd_set, NULL, NULL, NULL) < 0) {
       die("Could not select.\n");
     }
 
@@ -350,22 +349,23 @@ static void event_loop() {
             die("Could not accept(%d).\n");
           }
           if (fd > 0) {
-            FD_SET(fd, &active_fd_set);
             trace("accepted.\n");
+            trace("Reading from client...\n");
+            char buffer[BUFFER_SIZE];
+            int readbytes = read(fd, buffer, BUFFER_SIZE);
+            if (readbytes < 0) {
+              trace("Could not read.\n");
+            } else if (readbytes > 0) {
+              trace("Received '%s' from(%d).\n", buffer, fd);
+              if (strcmp(buffer, "quit") == 0) {
+                char* reply = "quiting";
+                send(fd, reply, strlen(reply), 0);
+                running = false;
+              }
+            }
+            close(fd);
+            trace("Closed (%d).\n", fd);
           }
-        } else {
-          trace("Reading from client...\n");
-          char buffer[BUF_SIZE];
-          int readbytes = read(i, buffer, BUF_SIZE);
-          if (readbytes < 0) {
-            trace("Could not read.\n");
-          } else if (readbytes > 0) {
-            trace("Received '%s' from(%d).\n", buffer, i);
-            char* reply = "ok";
-            send(i, reply, strlen(reply), 0);
-          }
-          close(i);
-          FD_CLR(i, &active_fd_set);
         }
       }
     }
@@ -390,5 +390,5 @@ int main() {
   step("Subscribing", setup_subscriptions);
   event_loop();
   disconnect();
-  return 0;
+  exit(EXIT_SUCCESS);
 }

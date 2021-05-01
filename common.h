@@ -1,2 +1,2 @@
 #define RWM_SOCK_PATH "/tmp/rwm-socket"
-#define BUF_SIZE 100
+#define BUFFER_SIZE 100

@@ -5,7 +5,7 @@
 #include <sys/socket.h>
 #include "common.h"
 
-int main() {
+int main(int argc, char **argv) {
   int sock = 0;
   if ((sock = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
     perror("socket creation failed");
@@ -22,12 +22,14 @@ int main() {
   }
   printf("connected\n");
 
-  char *message = "Ping from client";
-  char buffer[BUF_SIZE] = {0};
-  send(sock, message, strlen(message), 0);
+  char message[BUFFER_SIZE] = "version";
+  if (argc > 1) strncpy(message, argv[1], sizeof(message));
+  char buffer[BUFFER_SIZE] = {0};
+  send(sock, message, sizeof(message), 0);
   printf("Message sent\n");
-  read(sock, buffer, BUF_SIZE);
+  read(sock, buffer, BUFFER_SIZE);
   printf("%s\n", buffer);
+  exit(EXIT_SUCCESS);
   return 0;
 }
 
